@@ -118,6 +118,8 @@ def main():
                                                         "it was slowed (bench/quiet.py)")
     p.add_argument("--json")
     args = p.parse_args()
+    if args.dtype == "float32":
+        os.environ.setdefault("MLX_ENABLE_TF32", "0")  # #5: as the server does, before MLX's first computation
 
     import mlx.core as mx
 
