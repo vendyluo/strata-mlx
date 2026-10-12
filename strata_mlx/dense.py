@@ -9,7 +9,8 @@ number in 8.56 bits.
 
 A chunk of a prompt (more than a window's tokens) multiplies as floats; those are made from the three parts at
 the first prompt and kept beside them, so the file's Q6_K layers are then held twice, and answers read the
-small form.
+small form. Only where the machine has the memory for them (load.py, #3): elsewhere they are made anew for each
+chunk and let go, and prompts are read a tenth slower.
 
 A kernel on the file's blocks themselves reads 6.56 bits and was tried first (bench/experiments/e20, e21): a
 block interleaves the codes' bits, and undoing that for every weight costs more than the bytes it spares once a
@@ -98,6 +99,13 @@ def fits(rows: int, cols: int) -> bool:
     return rows % _ROWS == 0 and cols % (32 * _WEIGHTS) == 0
 
 
+def kept_floats(tensors: dict, itemsize: int = 2) -> int:
+    """Bytes the weights of a file's Q6_K layers take as floats of `itemsize` once a prompt has been read, if they
+    are kept: 3.3 GB in float16 for the IQ3_S file, 0.2 for Q2_0. The output layer never sees a chunk."""
+    return sum(itemsize * t.shape[0] * t.shape[1] for name, t in tensors.items()
+               if t.type == "Q6_K" and len(t.shape) == 2 and fits(*t.shape) and name != "output.weight")
+
+
 class ScaledLinear:
     """A linear layer held as codes, scales and d; called like `nn.Linear`."""
 
@@ -106,6 +114,7 @@ class ScaledLinear:
         self.output_dims, self.input_dims = codes.shape
         self.d_step = self.input_dims // d.shape[1]  # weights to a d: 256, or fewer where the inputs were reordered
         self._floats = None
+        self.keep = True  # the floats made for a chunk of a prompt stay for the next ones (load.py decides)
         if not fits(*codes.shape):
             raise ValueError(f"a layer of {codes.shape} does not fit the kernel")
 
@@ -137,6 +146,8 @@ class ScaledLinear:
             # Chunks of prompts multiply as floats, MLX's product being what it is at many tokens. The floats
             # are made at the first chunk and kept: 3.3 GB for the IQ3_S file beside the 1.8 GB that answers
             # read of the same layers (the output layer never sees a chunk), 0.2 GB for the Q2_0 file.
+            if not self.keep:
+                return x @ self.floats(dtype).T
             if self._floats is None or self._floats.dtype != dtype:
                 self._floats = self.floats(dtype)
                 _holding.append(self)

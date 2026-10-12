@@ -179,6 +179,7 @@ def test_what_is_left_of_a_machines_memory_goes_to_the_experts():
     assert not paged.all_fit(16 * gib, q2_experts, q2_dense)
     assert not paged.all_fit(32 * gib, q2_experts, q2_dense)
     assert paged.all_fit(64 * gib, q2_experts, q2_dense)
+    assert not paged.all_fit(64 * gib, q2_experts, q2_dense, 20 * gib)  # and the floats kept for prompts
     store = paged.ExpertStore(0)
     held = mx.get_active_memory()
     assert store.fit(32 * gib) == 32 * gib - paged.SYSTEM - paged.WORKING - held

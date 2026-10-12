@@ -246,6 +246,9 @@ def main():
         # #1: resident, the arrays are not let go of by the GPU after a few seconds of nothing; not where experts
         # are read from the SSD, whose machine may need macOS to be able to move memory
         mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
+    if not paged and not model.keeps_floats:
+        print("strata-mlx: the Q6_K layers' weights as floats do not fit beside the model; they are made anew for "
+              "each chunk of a prompt, which reads prompts about a tenth slower", file=sys.stderr)
     mtp = load_mtp(opts["--mtp"], model.args.text, dtype) if opts["--mtp"] else None
     chunk = int(opts["--prefill"]) if opts["--prefill"].isdigit() else 2048
     # --spec is the CUDA engine's window; here anything above 1 turns the draft head on, and how many guesses it
