@@ -30,11 +30,14 @@ float16: its table lookup is float16 only) and 53-73 with IQ3_S (69-80).
 import argparse
 import json
 import math
+import os
 import sys
 import time
 from pathlib import Path
 
-import mlx.core as mx
+# #5: the judge is float32, and on an M5 MLX multiplies float32 at reduced precision unless told not to first
+os.environ.setdefault("MLX_ENABLE_TF32", "0")
+import mlx.core as mx  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
