@@ -20,6 +20,7 @@ each expert is its own array.
 
 import fcntl
 import os
+import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
@@ -35,6 +36,7 @@ WHOLE_FROM = 384  # experts of a layer in one call from which its tensors are re
 KEEP_UPTO = 640  # (token, expert) pairs in one call up to which what was read stays in memory: answers, not prompts
 PAGE, PIECE = 16384, 1 << 20
 SEPARATE_UPTO = 80  # pairs up to which each brings its own arrays to the kernels: a window of an answer
+READ_AHEAD_FROM = 8192  # pairs in a chunk of a prompt from which the next layer is read whole while one computes
 
 
 # What a machine's memory is set aside for before experts get the rest, in bytes: macOS and whatever else runs;
@@ -64,6 +66,21 @@ def sizes(files: list) -> tuple:
     return experts, dense
 
 
+def layer_bytes(tensors) -> int:
+    """A layer's experts, its three tensors, as the file has them."""
+    return sum(t.data.nbytes for t in tensors)
+
+
+def largest_layer(files: list) -> int:
+    """The experts of a model's largest layer, in bytes: what reading a layer ahead holds beside the others."""
+    layers = {}
+    for f in files:
+        for name, t in f.tensors.items():
+            if name.endswith("_exps.weight"):
+                layers.setdefault(name.split(".")[1], []).append(t)
+    return max(map(layer_bytes, layers.values()), default=0)
+
+
 def all_fit(machine: int, experts: int, dense: int, floats: int = 0) -> bool:
     """Whether a machine of that much memory holds the whole model, sizes as in the file; with `floats`, and the
     weights of its Q6_K layers as floats beside it, kept for prompts (dense.ScaledLinear, #3)."""
@@ -83,11 +100,18 @@ class ExpertStore:
         self.use = {}  # (layer, expert) -> times an answer asked for it since the start
         self.fds = {}
         self.pool = ThreadPoolExecutor(threads)
+        # #4: the next layer's tensors, read whole while this one computes: (layer, its runs, the read), or None
+        self.ahead, self.read_ahead = None, True
+        self.ahead_pool, self.ahead_reader = ThreadPoolExecutor(threads), ThreadPoolExecutor(1)
+        self.counting = threading.Lock()  # bytes_read: a read ahead let go of may still be counting on its thread
         self.reset_stats()
 
     def fit(self, machine: int) -> int:
-        """Set the budget to what a machine of that much memory has left, everything else being loaded now."""
-        self.budget = max(LEAST, machine - SYSTEM - WORKING - (mx.get_active_memory() - self.held))
+        """Set the budget to what a machine of that much memory has left, everything else being loaded now, and
+        with `read_ahead` the experts of one more layer: those read while a layer computes (#4; measured as a 16 GB
+        machine with the Q2_0 file, 0.48 GB more at the peak than when a layer was read only when it asked)."""
+        ahead = max((layer_bytes(t) for t in self.layers.values()), default=0) if self.read_ahead else 0
+        self.budget = max(LEAST, machine - SYSTEM - WORKING - ahead - (mx.get_active_memory() - self.held))
         return self.budget
 
     def reset_stats(self):
@@ -108,29 +132,95 @@ class ExpertStore:
             raise OSError(f"{t.name}: short read")
         return mx.array(np.frombuffer(data, dtype=np.uint8))
 
-    def whole(self, tensors: tuple) -> list:
-        """A layer's tensors, all experts, read in file order and not kept.
+    def _runs(self, layer: int | None, n: int) -> list:
+        """A layer's experts in file order as runs (first, count, in memory), those in memory and those not."""
+        out = []
+        for e in range(n):
+            held = (layer, e) in self.lru
+            if out and out[-1][2] == held:
+                out[-1][1] += 1
+            else:
+                out.append([e, 1, held])
+        return [tuple(r) for r in out]
+
+    def _start(self, tensors: tuple, runs: list) -> tuple:
+        """What `_fill` needs, made here, on the thread that runs MLX: for each tensor an array for each run of
+        experts not in memory, and the memory of each, as numpy sees it."""
+        dst = [[mx.zeros((count * (t.data.nbytes // t.shape[0]),), dtype=mx.uint8)
+                for first, count, held in runs if not held] for t in tensors]
+        mx.eval(dst)
+        return dst, [[np.array(a, copy=False) for a in arrays] for arrays in dst]
+
+    def _fill(self, tensors: tuple, runs: list, dst: list, into: list, pool: ThreadPoolExecutor) -> list:
+        """The bytes of each run of experts not in memory, read from the file into the arrays `dst` through their
+        memory `into`. It runs on another thread, and calls nothing of MLX: the arrays are written where they
+        lie, before anything reads them.
 
         In pieces of 1 MiB that start on a page: measured on macOS, a read of 2 MB or more goes through the page
-        cache whatever F_NOCACHE says (240 MB read in 4 MB pieces left 189 MB there), one of 1 MiB does not.
+        cache whatever F_NOCACHE says (240 MB read in 4 MB pieces left 189 MB there), one of 1 MiB does not. A
+        run's first piece starts on the page before it, so it is read beside and its part copied.
+        """
+        jobs, heads, size = [], [], 0
+        missing = [(first, count) for first, count, held in runs if not held]
+        for t, mems in zip(tensors, into):
+            fd, one = self._fd(t.path), t.data.nbytes // t.shape[0]
+            for (first, count), mem in zip(missing, mems):
+                view = memoryview(mem)
+                begin, end = t.offset + first * one, t.offset + (first + count) * one
+                start = begin // PAGE * PAGE
+                head = bytearray(min(start + PIECE, end) - start)
+                heads.append((head, begin - start, view[: len(head) - (begin - start)]))
+                jobs.append((fd, memoryview(head), start))
+                jobs += [(fd, view[at - begin : min(at + PIECE, end) - begin], at) for at in range(start + PIECE, end, PIECE)]
+                size += count * one
+        got = pool.map(lambda job: (os.preadv(job[0], [job[1]], job[2]), len(job[1])), jobs)
+        if any(n != want for n, want in got):
+            raise OSError(f"{tensors[0].name}: short read")
+        with self.counting:
+            self.bytes_read += size
+        for head, skip, part in heads:
+            part[:] = memoryview(head)[skip:]
+        return dst
+
+    def whole(self, tensors: tuple, layer: int | None = None) -> list:
+        """A layer's tensors, all experts, not kept: those in memory taken from there, the others read in file
+        order. `read_s` is the time spent waiting for the disk.
+
+        #4: a prompt's chunk reads every layer so, one after another, and the GPU computing a layer and the disk
+        reading the next took turns, and with a share of the experts in memory it read them all again. Now the
+        layer may have been read while the one before computed (`read_next`), what is in memory is not read, and
+        the file's bytes are read straight into arrays, which the GPU joins to those in memory.
         """
         t0 = time.perf_counter()
-        out = []
-        for t in tensors:
-            fd, size = self._fd(t.path), t.data.nbytes
-            start = t.offset // PAGE * PAGE
-            buf = bytearray(t.offset + size - start)
-            view = memoryview(buf)
-            got = self.pool.map(lambda at: os.preadv(fd, [view[at : at + PIECE]], start + at), range(0, len(buf), PIECE))
-            if sum(got) != len(buf):
-                raise OSError(f"{t.name}: short read")
-            out.append(mx.array(np.frombuffer(view[t.offset - start :], dtype=np.uint8)))
-            self.bytes_read += size
+        runs = self._runs(layer, tensors[0].shape[0])
+        ahead, self.ahead = self.ahead, None
+        if ahead and ahead[:2] == (layer, runs):
+            read = ahead[2].result()
+        else:
+            read = self._fill(tensors, runs, *self._start(tensors, runs), self.pool)
         self.read_s += time.perf_counter() - t0
+        out = []
+        for j, arrays in enumerate(read):
+            arrays, pieces = iter(arrays), []
+            for first, count, held in runs:
+                pieces += [self.lru[(layer, e)][0][j] for e in range(first, first + count)] if held else [next(arrays)]
+            out.append(pieces[0] if len(pieces) == 1 else mx.concatenate(pieces))
         return out
+
+    def read_next(self, layer: int):
+        """Start reading the experts of the layer after this one that are not in memory, while this one computes."""
+        after = [n for n in self.layers if n > layer]
+        if not self.read_ahead or not after:
+            return
+        nxt = min(after)
+        tensors = self.layers[nxt]
+        runs = self._runs(nxt, tensors[0].shape[0])
+        self.ahead = (nxt, runs, self.ahead_reader.submit(self._fill, tensors, runs, *self._start(tensors, runs),
+                                                          self.ahead_pool))
 
     def clear(self):
         """Let go of every expert and of the counts of their use."""
+        self.ahead = None
         self.lru.clear()
         self.use.clear()
         self.held = 0
@@ -191,7 +281,8 @@ class ExpertStore:
             for i, e in enumerate(missing):
                 got[e] = tuple(arrays[i * n : (i + 1) * n])
                 size = sum(a.nbytes for a in got[e])
-                self.bytes_read += size
+                with self.counting:
+                    self.bytes_read += size
                 if keep:
                     self.lru[(layer, e)] = (got[e], size)
                     self.held += size
@@ -228,13 +319,23 @@ class PagedSwitchGLU:
         idx = np.array(indices)  # the layer waits here for its router
         used, local = np.unique(idx, return_inverse=True)
         if idx.size <= SEPARATE_UPTO:
+            self.store.ahead = None
             return self._separately(x, idx, used)
-        if len(used) >= WHOLE_FROM:
-            stacks, n = self.store.whole(self.tensors), self.tensors[0].shape[0]
+        ahead = self.store.ahead is not None and self.store.ahead[0] == self.layer
+        if len(used) >= WHOLE_FROM or ahead:
+            # #4: read while the layer before computed, it is used whole even where the chunk uses fewer experts:
+            # what it needs is there, and reading it again a few at a time would take longer than the rest did
+            stacks, n = self.store.whole(self.tensors, self.layer), self.tensors[0].shape[0]
         else:
+            self.store.ahead = None
             each = self.store.get(self.layer, self.tensors, used.tolist(), keep=idx.size <= KEEP_UPTO)
             stacks, n = [mx.concatenate(col) if len(col) > 1 else col[0] for col in zip(*each)], len(used)
             indices = mx.array(local.reshape(idx.shape).astype(np.uint32))
+        if idx.size >= READ_AHEAD_FROM:
+            # a long chunk of a prompt uses nearly every expert of a layer, and the next layer's are read while this one
+            # computes. Not a chunk of a few hundred tokens: of a layer's experts not in memory, it uses so few that
+            # reading them all, even out of the way, made a 340-token prompt a sixth slower as a 24 GB machine
+            self.store.read_next(self.layer)
         up, gate, down = (self._linear(b, t, n) for b, t in zip(stacks, self.tensors))
 
         return switch_glu(x, indices, up, gate, down)

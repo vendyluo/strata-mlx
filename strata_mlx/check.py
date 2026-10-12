@@ -10,8 +10,8 @@ whole. If not, the rest is read from the SSD as tokens ask for it. If under half
 Mac is too small.
 
 Where experts are read from the SSD, the dense tensors of two types stay the file's blocks (dense.BlockLinear)
-and take that much less than the rule's arrays; that is counted for such a Mac, as the engine finds it when it
-starts.
+and take that much less than the rule's arrays, and the experts of one layer more are held while a prompt is
+read (one layer read ahead); both are counted for such a Mac, as the engine finds them when it starts.
 
 The weights of the Q6_K layers as floats, 3.3 GB with the IQ3_S file, are kept from the first prompt on only
 where they fit beside the whole model (dense.py, load.py); a Mac that holds the file whole and lacks just that
@@ -33,7 +33,7 @@ from pathlib import Path
 
 from .dense import kept_floats, spared
 from .gguf import shards
-from .paged import DENSE_AS_ARRAYS, DRAFT_HEAD, LEAST, SYSTEM, WORKING, all_fit, machine_memory, sizes
+from .paged import DENSE_AS_ARRAYS, DRAFT_HEAD, LEAST, SYSTEM, WORKING, all_fit, largest_layer, machine_memory, sizes
 
 GB = 2**30
 HEAD_ON_DISK = 4.9e9  # the draft head's 31 tensors, as tools/mtp_fetch.py leaves them
@@ -50,11 +50,12 @@ class Model:
     floats: int  # its Q6_K layers but the output layer as float16: held once a prompt has been read
     disk: int
     spared: int = 0  # what the dense tensors take less as blocks, where experts are read from the SSD
+    ahead: int = 0  # the experts of its largest layer: read ahead while one computes, where they are read from the SSD
 
 
 # The files that have been run, for a Mac that does not have them yet: what `of` reads from their headers.
-KNOWN = (Model("Q2_0", 33_973_862_400, 3_638_853_120, 205_783_040, 66_423_878_624, 1_739_248_640),
-         Model("IQ3_S", 50_292_326_400, 4_514_173_440, 3_306_946_560, 83_617_662_656, 567_336_960))
+KNOWN = (Model("Q2_0", 33_973_862_400, 3_638_853_120, 205_783_040, 66_423_878_624, 1_739_248_640, 707_788_800),
+         Model("IQ3_S", 50_292_326_400, 4_514_173_440, 3_306_946_560, 83_617_662_656, 567_336_960, 1_363_148_800))
 
 
 def of(path: str, files: list | None = None) -> Model:
@@ -63,7 +64,7 @@ def of(path: str, files: list | None = None) -> Model:
     experts, dense = sizes(files)
     m = _NAME.search(path)
     return Model(m.group(1) if m else Path(path).stem, experts, dense, kept_floats(files[0].tensors),
-                 sum(os.path.getsize(f.path) for f in files), spared(files[0].tensors))
+                 sum(os.path.getsize(f.path) for f in files), spared(files[0].tensors), largest_layer(files))
 
 
 @dataclass
@@ -77,7 +78,7 @@ class Plan:
 
 def plan(m: Model, machine: int) -> Plan:
     fixed = int(SYSTEM + WORKING + DENSE_AS_ARRAYS * m.dense + DRAFT_HEAD)
-    paged = fixed - m.spared
+    paged = fixed - m.spared + m.ahead
     return Plan(all_fit(machine, m.experts, m.dense), all_fit(machine, m.experts, m.dense, m.floats),
                 fixed + m.experts + m.floats, machine - paged, paged + LEAST)
 

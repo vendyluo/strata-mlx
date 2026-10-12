@@ -30,9 +30,10 @@ def test_whole_is_what_the_engine_decides(model):
 def test_the_experts_kept_are_about_what_a_start_measured():
     # ROADMAP: Q2_0 with the draft head, started as a machine of 16, 24 and 32 GB, gave its experts this much
     # (1.5, 10.1 and 18.7 GB before its dense tensors of two types stayed blocks). macOS was left 4.5 GB then and
-    # is left 8.5 now (#6), so the experts get 4.0 GB less: on a 16 GB machine less than the least there is
+    # is left 8.5 now (#6), and a layer's experts are read ahead (#4): so the experts get 4.0 GB and a layer less,
+    # on a 16 GB machine less than the least there is
     for gb, measured in ((16, 3.3e9), (24, 11.9e9), (32, 20.5e9)):
-        assert abs(plan(Q2, gb * GB).kept - (measured - 4.0e9)) < 0.4e9
+        assert abs(plan(Q2, gb * GB).kept - (measured - 4.0e9 - Q2.ahead)) < 0.4e9
     assert plan(Q2, 16 * GB).kept < paged.LEAST <= plan(Q2, 24 * GB).kept
     assert Q2.spared == pytest.approx(1.74e9, rel=0.01)  # each of those starts gave the experts that much more
 
@@ -87,7 +88,7 @@ def test_blocks_spare_what_the_arrays_of_their_tensors_take_more(tmp_path):
     path = tmp_path / "some-Q9_Z-00001-of-00001.gguf"
     path.write_bytes(b"0")
     m = of(str(path), [SimpleNamespace(tensors=tensors, path=str(path))])
-    whole_rule = plan(Model("x", m.experts, m.dense, 0, 0), 16 * GB)
+    whole_rule = plan(Model("x", m.experts, m.dense, 0, 0, 0, m.ahead), 16 * GB)
     assert plan(m, 16 * GB).kept - whole_rule.kept == m.spared == dense.spared(tensors)
     assert plan(m, 16 * GB).least == whole_rule.least - m.spared
     assert plan(m, 16 * GB).needs == whole_rule.needs  # a Mac that holds the file whole holds arrays

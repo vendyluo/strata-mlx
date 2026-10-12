@@ -1,5 +1,6 @@
 """The line protocol, spoken to a small random model."""
 
+import gc
 import threading
 
 import mlx.core as mx
@@ -181,6 +182,16 @@ def test_what_is_left_of_a_machines_memory_goes_to_the_experts():
     assert paged.all_fit(64 * gib, q2_experts, q2_dense)
     assert not paged.all_fit(64 * gib, q2_experts, q2_dense, 20 * gib)  # and the floats kept for prompts
     store = paged.ExpertStore(0)
+    gc.collect()  # arrays of other tests in cycles, let go of in the middle of fit() otherwise
     held = mx.get_active_memory()
     assert store.fit(32 * gib) == 32 * gib - paged.SYSTEM - paged.WORKING - held
     assert store.fit(4 * gib) == int(0.5e9)  # never nothing
+    # #4: with layers, the largest one's experts are kept free for the layer read while another computes
+    from types import SimpleNamespace
+
+    store.layers = {i: tuple(SimpleNamespace(data=SimpleNamespace(nbytes=n)) for _ in range(3)) for i, n in ((0, 7), (1, 9))}
+    gc.collect()
+    held = mx.get_active_memory()
+    assert store.fit(32 * gib) == 32 * gib - paged.SYSTEM - paged.WORKING - 27 - held
+    store.read_ahead = False
+    assert store.fit(32 * gib) == 32 * gib - paged.SYSTEM - paged.WORKING - held

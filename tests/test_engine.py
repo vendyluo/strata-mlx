@@ -398,6 +398,84 @@ def test_a_prompt_reads_whole_layers_and_keeps_none_of_them(block_model, tmp_pat
     assert model.expert_store.bytes_read == len(model.model.layers) * (8 + 2) * ONE_EXPERT  # each layer whole, once
 
 
+def test_a_prompts_next_layer_is_read_while_this_one_computes(block_model, tmp_path, monkeypatch):
+    monkeypatch.setattr(paged, "WHOLE_FROM", 8)
+    monkeypatch.setattr(paged, "KEEP_UPTO", 40)
+    monkeypatch.setattr(paged, "READ_AHEAD_FROM", 41)
+    prompt = [(7 * i + 3) % TEXT["vocab_size"] for i in range(90)]
+    want = Engine(block_model, chunk=1).read(prompt)
+    for ahead in (True, False):
+        folder = tmp_path / str(ahead)
+        folder.mkdir()
+        model = _paged(folder, 1 << 30)
+        store = model.expert_store
+        store.read_ahead, pools = ahead, []
+        fill = store._fill
+        monkeypatch.setattr(store, "_fill", lambda *a: pools.append(a[-1]) or fill(*a))
+        assert Engine(model).read(prompt) == want
+        layers = len(model.model.layers)
+        # the first layer is read when it asks; with read_ahead every other one while the layer before computes
+        assert pools == [store.pool] + [store.ahead_pool if ahead else store.pool] * (layers - 1)
+        assert store.bytes_read == layers * (8 + 2) * ONE_EXPERT and store.ahead is None
+
+
+def test_a_short_chunk_over_experts_in_memory_reads_nothing_ahead(block_model, tmp_path, monkeypatch):
+    # a chunk that keeps nothing and is shorter than READ_AHEAD_FROM: the layers it uses are all in memory, and the
+    # next layer's other experts must not be read for it (a chunk of 65 tokens once read 502 of them a layer)
+    monkeypatch.setattr(paged, "KEEP_UPTO", 40)
+    monkeypatch.setattr(paged, "SEPARATE_UPTO", 10)
+    model = _paged(tmp_path, 1 << 30)
+    store, engine = model.expert_store, Engine(model)
+    prompt = [(3 * i + 2) % TEXT["vocab_size"] for i in range(30)]
+    engine.generate(prompt, N)  # its experts in memory
+    started = []
+    read_next = store.read_next
+    monkeypatch.setattr(store, "read_next", lambda layer: started.append(layer) or read_next(layer))
+    engine.reset()
+    store.reset_stats()
+    engine.read(prompt)
+    assert not started and store.misses == 0 and store.bytes_read == 0 and store.ahead is None
+
+
+def test_a_layer_read_whole_is_the_files_bytes_in_pieces_of_any_alignment(tmp_path):
+    # tensors larger than a piece, starting off a page, with experts in memory between runs read from the file
+    rng = np.random.default_rng(4)
+    data = rng.integers(0, 256, 9 * paged.PIECE, dtype=np.uint8)
+    (tmp_path / "f").write_bytes(data.tobytes())
+    one = 3 * paged.PIECE // 7 + 5  # bytes of one expert of one tensor
+    tensors = tuple(Tensor(f"t{i}", (6, one), "IQ4_NL", np.zeros(6 * one, np.uint8), str(tmp_path / "f"), at)
+                    for i, at in enumerate((12345, 3 * paged.PIECE + 1, 6 * paged.PIECE + 4096)))
+    store = paged.ExpertStore(1 << 30, threads=3)
+    for e in (0, 3, 4):  # in memory: what is copied from there must be what is there
+        store.lru[(7, e)] = (tuple(mx.array(np.full(one, e + 1, np.uint8)) for _ in tensors), 3 * one)
+    got = store.whole(tensors, 7)
+    for t, g in zip(tensors, got):
+        want = data[t.offset : t.offset + 6 * one].reshape(6, one).copy()
+        want[[0, 3, 4]] = np.array([1, 4, 5], np.uint8)[:, None]
+        np.testing.assert_array_equal(np.array(g).reshape(6, one), want)
+    assert store.bytes_read == 3 * 3 * one
+
+
+def test_a_prompt_reads_only_the_experts_not_in_memory(block_model, tmp_path, monkeypatch):
+    monkeypatch.setattr(paged, "WHOLE_FROM", 8)
+    monkeypatch.setattr(paged, "KEEP_UPTO", 40)
+    prompt = [(5 * i + 1) % TEXT["vocab_size"] for i in range(90)]
+    want = Engine(block_model, chunk=1).read(prompt)
+    model = _paged(tmp_path, 1 << 30)
+    store, engine = model.expert_store, Engine(model)
+    engine.generate(PROMPT, N)  # an answer leaves its experts in memory
+    layers = len(model.model.layers)
+    for layer, e in [(layer, e) for layer in range(layers) for e in (0, 3, 4, 7) if layer % 2 or e < 4]:
+        store.held -= store.lru.pop((layer, e))[1]  # runs held and not, at either end of a layer and inside
+    held = sum(1 for layer in range(layers) for e in range(8) if (layer, e) in store.lru)
+    assert 0 < held < 8 * layers
+    engine.reset()
+    store.reset_stats()
+    assert engine.read(prompt) == want
+    # the chunk reads what was not in memory; the prompt's last token by itself reads its own missing experts
+    assert (8 * layers - held) * ONE_EXPERT <= store.bytes_read < 8 * layers * ONE_EXPERT
+
+
 def test_a_window_spread_over_several_kernel_calls_gives_the_plain_answer(block_model, tmp_path, monkeypatch):
     # with ten experts a token, as in the real model, a kernel binds two tokens' worth: a window is several calls
     monkeypatch.setattr(paged, "MAX_SEPARATE", 3)  # here: one token a call
