@@ -29,6 +29,12 @@ Such a machine counts which experts its answers use, in `~/.cache/strata-mlx/exp
 The draft head's guesses are worked out over the rows of the output layer that have been in sight (rows.py);
 `--guess-rows off` has them go over all rows.
 
+Between requests the GPU is not left idle for long (#1): a machine that holds the model keeps its arrays resident
+(MLX's wired limit), and for `--keep-awake <seconds>` after a request (600 by default, 0 for never) the engine
+gives the GPU one addition a second. Without the first, a prompt read after two seconds of nothing ran at
+about half speed; without the second, the GPU took 250-320 ms to come back after four seconds of nothing
+(bench/experiments/e38, M5 Ultra: a piece of 64 tokens in 250-400 ms after a rest so, 120-180 ms with both).
+
 `strata-mlx --check [--native <shard 1>] [--machine-memory <GiB>]` loads nothing and says which of these a Mac
 of that memory would do with a file (check.py).
 """
@@ -50,6 +56,7 @@ END_TOKENS = (248044, 248046)  # <|endoftext|>, <|im_end|>
 _FLOATS = ("temperature", "top_p", "min_p", "penalty_repeat", "penalty_freq", "penalty_present")
 _INTS = ("top_k", "penalty_last_n", "seed")
 _IGNORED = ("cvec", "ckpt", "pin", "pcie_frac", "spec_min_p")  # for the CUDA engine's expert cache and its options
+AWAKE_EVERY = 1.0  # seconds between the additions that keep the GPU awake: one in 2.5 s was enough as well (e38)
 
 
 class Session:
@@ -183,7 +190,7 @@ def _options(argv: list) -> dict:
     """The arguments this engine knows; the CUDA engine's others (expert cache, K/V placement, ...) are skipped."""
     known = {"--native": None, "--mtp": None, "--spec": "4", "--max-context": "131072", "--dtype": "float16",
              "--prefill": "2048", "--suffix-draft": "auto", "--expert-memory": "auto", "--machine-memory": None,
-             "--expert-profile": "auto", "--guess-rows": "on"}
+             "--expert-profile": "auto", "--guess-rows": "on", "--keep-awake": "600"}
     out, skipped, i = dict(known), [], 0
     while i < len(argv):
         a = argv[i]
@@ -235,6 +242,10 @@ def main():
                     machine_memory=machine)
     store = model.expert_store
     paged = store is not None
+    if not paged:
+        # #1: resident, the arrays are not let go of by the GPU after a few seconds of nothing; not where experts
+        # are read from the SSD, whose machine may need macOS to be able to move memory
+        mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     mtp = load_mtp(opts["--mtp"], model.args.text, dtype) if opts["--mtp"] else None
     chunk = int(opts["--prefill"]) if opts["--prefill"].isdigit() else 2048
     # --spec is the CUDA engine's window; here anything above 1 turns the draft head on, and how many guesses it
@@ -300,11 +311,19 @@ def main():
           f"guess_rows={int(engine.rows is not None)}"
           + (f" expert_memory_gb={store.budget / 1e9:.1f}" if paged else ""))
     write(f"READY {max_context} stop")
+    awake, last = float(opts["--keep-awake"]), time.monotonic()
     while True:
-        line = commands.get()
+        try:
+            line = commands.get(timeout=AWAKE_EVERY if awake > 0 else None)
+        except queue.Empty:
+            if time.monotonic() - last < awake:
+                mx.eval(mx.array(1.0) + 1)  # #1: the GPU kept from the sleep it takes 250-320 ms to come back from
+            continue
+        last = time.monotonic()
         if line == "QUIT":
             return 0
         session.handle(line)
+        last = time.monotonic()  # any line from the server, not only a request: someone is using it
         if profile_path and line.startswith("GEN") and store.use:
             try:
                 save_profile(profile_path, store.profile(before))
