@@ -5,7 +5,8 @@ Qwen3.8-Flash-Next on Apple Silicon: an MLX engine that reads the GGUF files
 web page can drive it.
 
 This is an independent, unofficial project. It is not affiliated with Strata or its authors, who have said
-that macOS is out of scope for Strata itself. It is experimental and has been run on one machine.
+that macOS is out of scope for Strata itself. It is experimental and has been run on two machines, an M4 Max and
+an M5 Ultra.
 
 ## What it is
 
@@ -53,15 +54,29 @@ faster.
 With the draft head off the engine still copies guesses from earlier in the conversation where the answer
 repeats it; one token a pass with no guesses at all is 46-48 tok/s (Q2_0) and 41-43 (IQ3_S).
 
-Two things these tables do not show, both in [ISSUES.md](ISSUES.md): prompts of a few dozen tokens are read
-slower than by llama.cpp (about 0.6 s to the first token against 0.3 s), and this engine's reading speeds
-are from a later session than the other engines'. Ollama 0.35.1 loads neither file.
+These tables are from before two things were found, on an M5 Ultra: after a few seconds of nothing the GPU
+let go of the model's arrays and then slept, so that a prompt of a few dozen tokens took about 0.6 s to the
+first token where llama.cpp took 0.3; and this engine's reading speeds were from a later session than the other
+engines'. Ollama 0.35.1 loads neither file.
+
+On an M5 Ultra with 96 GB, every engine in one session and the server keeping the GPU awake, tok/s (llama.cpp
+0.6.0; `--spec 1` is the draft head off):
+
+| File | Answers | `--spec 1` | llama.cpp | Reading 1,180 tokens | `--spec 1` | llama.cpp |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Q2_0 | **132-189** | 75-102 | 60-61 | **2,346-2,360** | 2,449-2,675 | 1,291-1,292 |
+| IQ3_S | **103-152** | 71-90 | 57-58 | **2,364** | 2,384-2,483 | 1,288-1,304 |
+| IQ3_XXS | **122-161** | 71-86 | 58-59 | **2,413-2,514** | 2,554-2,574 | 1,317-1,326 |
+| IQ2_XS | **118-166** | 72-102 | 60-61 | **2,500-2,501** | 2,551-2,561 | 1,346-1,348 |
+
+There a prompt of 27 tokens waits 0.14 s for the first token, 0.25-0.97 s with llama.cpp. The M4 Max has not been
+run again.
 
 In 16-bit floats, the default, about one token in 250 is not the one the exact model would pick, at places
 where two candidates are nearly tied; that is so with and without the draft head. `--dtype float32` writes
 the exact model's tokens (checked on eight answers) and is slower. On an M5, MLX by default multiplies float32
 matrices only about as accurately as float16 ones, so `--dtype float32` and the tests turn that off
-(`MLX_ENABLE_TF32=0`); the tests pass on an M5 with it, and the model has not been run in float32 there
+(`MLX_ENABLE_TF32=0`); on an M5 Ultra float32 so wrote the model's own token at every step of four answers
 ([issue 5](https://github.com/yibie/strata-mlx/issues/5)).
 
 With part of the experts in memory and the rest on the SSD, limited on the same machine to stand for smaller
@@ -70,8 +85,11 @@ ones, Q2_0 only: answers at 11-12 tok/s with 3.3 GB of experts in memory, 18-27 
 experts from the disk ([issue 4](https://github.com/yibie/strata-mlx/issues/4)). Those were what a 16, 24 and
 32 GB machine kept when the engine left macOS 4.2 GB. A real 32 GB Mac, a MacBook Air M5, swapped with 20.5 GB
 and wrote answers at 6-19 tok/s; with 16 GB it wrote them at 23-29
-([issue 6](https://github.com/yibie/strata-mlx/issues/6)). So the engine now leaves macOS 7.9 GB, which gives
-a 32 GB machine's experts 16 GB, and the three figures above have not been measured again with it.
+([issue 6](https://github.com/yibie/strata-mlx/issues/6)). So the engine now leaves macOS 7.9 GB, and keeps one
+layer's experts free for reading the next layer while a prompt is read, which gives a 32 GB machine's experts
+15.5 GB; the three figures above have not been measured again with it. Reading a prompt on such machines was
+then made faster: on an M5 Ultra, 1,468 tokens as a 16, 24 and 32 GB machine at 390-403, 382-386 and 410-433
+tok/s, where it had been 217-247, 214-216 and 128-183 ([issue 4](https://github.com/yibie/strata-mlx/issues/4)).
 
 The full account, with what was tried and did not help, is in [ROADMAP.md](ROADMAP.md) (English, as it went)
 and [docs/OPTIMIZATION_RECORD.md](docs/OPTIMIZATION_RECORD.md) (Chinese, by topic).
@@ -92,11 +110,11 @@ By the same arithmetic the engine starts with:
 | Mac's memory | Q2_0 (66 GB on disk) | IQ3_S (84 GB on disk) |
 | :--- | :--- | :--- |
 | 16 GB | too small | too small |
-| 24 GB | 22% of the experts in memory | 10% of the experts in memory |
-| 32 GB | 48% of the experts in memory | 27% of the experts in memory |
-| 36 GB | 60% of the experts in memory | 36% of the experts in memory |
-| 48 GB | 98% of the experts in memory | 61% of the experts in memory |
-| 64 GB | whole | 95% of the experts in memory |
+| 24 GB | 20% of the experts in memory | 7% of the experts in memory |
+| 32 GB | 46% of the experts in memory | 24% of the experts in memory |
+| 36 GB | 58% of the experts in memory | 33% of the experts in memory |
+| 48 GB | 96% of the experts in memory | 59% of the experts in memory |
+| 64 GB | whole | 93% of the experts in memory |
 | 96 GB and more | whole | whole |
 
 "Whole" is the path the speeds under [Measured](#measured) are for, on an M4 Max; other chips have not been
@@ -116,13 +134,13 @@ only; the prompt kernel uses Metal 4's Metal Performance Primitives.
 ```sh
 git clone https://github.com/yibie/strata-mlx && cd strata-mlx
 uv sync
-uv run pytest          # 256 tests, no model file needed
+uv run pytest          # 332 tests, no model file needed
 ```
 
 The model, about 66 GB for Q2_0: both shards of one size from
 [ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF](https://huggingface.co/ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF),
-side by side in one folder. Q2_0 and IQ3_S have been run; the other sizes have a path in the loader and have
-not.
+side by side in one folder (the second shard is the same file in all four sizes). Q2_0 and IQ3_S have been run on
+both machines, IQ3_XXS and IQ2_XS on the M5 Ultra, all four checked against llama.cpp's answer from the same file.
 
 The draft head is not in those files. Its 31 tensors, 4.9 GB, are fetched out of the original checkpoint by
 range requests, without downloading its 360 GB, and each is checked against a SHA-256. The script is Strata's
@@ -146,7 +164,8 @@ in `args`; Strata's `setup.py` does not run on macOS, so that config is written 
 
 Options: `--spec 1` (draft head off), `--dtype float32`, `--max-context N`, `--expert-memory GB` (how much of
 the experts to keep in memory; by default all of them if the machine holds the model), `--machine-memory GiB`
-(run as a machine of that size would), `--guess-rows off`, `--expert-profile off`.
+(run as a machine of that size would), `--guess-rows off`, `--expert-profile off`, `--keep-awake SECONDS` (how long
+after a request the GPU is kept from sleeping, 600 by default, 0 for never).
 
 The benchmarks in `bench/` tokenize with llama.cpp's `llama-tokenize`, and `bench/compare_servers.py` starts
 `llama-server` and LM Studio's `lms` if they are installed.

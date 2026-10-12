@@ -1,0 +1,231 @@
+<|im_start|>user
+Review number 1. Say in two sentences what this module is for.
+
+```python
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass
+class Item:
+    name: str
+    price: float
+    quantity: int = 1
+
+    def total(self) -> float:
+        return self.price * self.quantity
+
+
+class Cart:
+    def __init__(self):
+        self.items = []
+
+    def add(self, name: str, price: float, quantity: int = 1) -> None:
+        for item in self.items:
+            if item.name == name:
+                item.quantity += quantity
+                return
+        self.items.append(Item(name, price, quantity))
+
+    def remove(self, name: str) -> bool:
+        for i, item in enumerate(self.items):
+            if item.name == name:
+                del self.items[i]
+                return True
+        return False
+
+    def total(self) -> float:
+        return sum(item.total() for item in self.items)
+
+    def save(self, path: Path) -> None:
+        path.write_text(json.dumps([vars(item) for item in self.items], indent=2))
+
+    @classmethod
+    def load(cls, path: Path) -> "Cart":
+        cart = cls()
+        for row in json.loads(path.read_text()):
+            cart.items.append(Item(**row))
+        return cart
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass
+class Item:
+    name: str
+    price: float
+    quantity: int = 1
+
+    def total(self) -> float:
+        return self.price * self.quantity
+
+
+class Cart:
+    def __init__(self):
+        self.items = []
+
+    def add(self, name: str, price: float, quantity: int = 1) -> None:
+        for item in self.items:
+            if item.name == name:
+                item.quantity += quantity
+                return
+        self.items.append(Item(name, price, quantity))
+
+    def remove(self, name: str) -> bool:
+        for i, item in enumerate(self.items):
+            if item.name == name:
+                del self.items[i]
+                return True
+        return False
+
+    def total(self) -> float:
+        return sum(item.total() for item in self.items)
+
+    def save(self, path: Path) -> None:
+        path.write_text(json.dumps([vars(item) for item in self.items], indent=2))
+
+    @classmethod
+    def load(cls, path: Path) -> "Cart":
+        cart = cls()
+        for row in json.loads(path.read_text()):
+            cart.items.append(Item(**row))
+        return cart
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass
+class Item:
+    name: str
+    price: float
+    quantity: int = 1
+
+    def total(self) -> float:
+        return self.price * self.quantity
+
+
+class Cart:
+    def __init__(self):
+        self.items = []
+
+    def add(self, name: str, price: float, quantity: int = 1) -> None:
+        for item in self.items:
+            if item.name == name:
+                item.quantity += quantity
+                return
+        self.items.append(Item(name, price, quantity))
+
+    def remove(self, name: str) -> bool:
+        for i, item in enumerate(self.items):
+            if item.name == name:
+                del self.items[i]
+                return True
+        return False
+
+    def total(self) -> float:
+        return sum(item.total() for item in self.items)
+
+    def save(self, path: Path) -> None:
+        path.write_text(json.dumps([vars(item) for item in self.items], indent=2))
+
+    @classmethod
+    def load(cls, path: Path) -> "Cart":
+        cart = cls()
+        for row in json.loads(path.read_text()):
+            cart.items.append(Item(**row))
+        return cart
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass
+class Item:
+    name: str
+    price: float
+    quantity: int = 1
+
+    def total(self) -> float:
+        return self.price * self.quantity
+
+
+class Cart:
+    def __init__(self):
+        self.items = []
+
+    def add(self, name: str, price: float, quantity: int = 1) -> None:
+        for item in self.items:
+            if item.name == name:
+                item.quantity += quantity
+                return
+        self.items.append(Item(name, price, quantity))
+
+    def remove(self, name: str) -> bool:
+        for i, item in enumerate(self.items):
+            if item.name == name:
+                del self.items[i]
+                return True
+        return False
+
+    def total(self) -> float:
+        return sum(item.total() for item in self.items)
+
+    def save(self, path: Path) -> None:
+        path.write_text(json.dumps([vars(item) for item in self.items], indent=2))
+
+    @classmethod
+    def load(cls, path: Path) -> "Cart":
+        cart = cls()
+        for row in json.loads(path.read_text()):
+            cart.items.append(Item(**row))
+        return cart
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass
+class Item:
+    name: str
+    price: float
+    quantity: int = 1
+
+    def total(self) -> float:
+        return self.price * self.quantity
+
+
+class Cart:
+    def __init__(self):
+        self.items = []
+
+    def add(self, name: str, price: float, quantity: int = 1) -> None:
+        for item in self.items:
+            if item.name == name:
+                item.quantity += quantity
+                return
+        self.items.append(Item(name, price, quantity))
+
+    def remove(self, name: str) -> bool:
+        for i, item in enumerate(self.items):
+            if item.name == name:
+                del self.items[i]
+                return True
+        return False
+
+    def total(self) -> float:
+        return sum(item.total() for item in self.items)
+
+    def save(self, path: Path) -> None:
+        path.write_text(json.dumps([vars(item) for item in self.items], indent=2))
+
+    @classmethod
+    def load(cls, path: Path) -> "Cart":
+        cart = cls()
+        for row in json.loads(path.read_text()):
+            cart.items.append(Item(**row))
+        return cart
+```<|im_end|>
+<|im_start|>assistant

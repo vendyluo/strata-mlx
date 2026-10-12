@@ -625,3 +625,115 @@ What was measured before building it:
 Settled: the target file is Q2_0, the one on disk (no space for the Coder or any other file), behind a memory
 budget that one build serves 16, 24 and 32 GB machines with; it is measured here by capping the budget, reading
 experts past the page cache. 24 and 32 GB machines are the easier case: the 6,000 and 12,000 rows.
+
+## On an M5 Ultra with 96 GB: the open issues, and the two files not run before
+
+Run by a second person on their own Mac: an M5 Ultra with 96 GB, macOS 27.0.1, MLX 0.32.3, llama.cpp 0.6.0 from
+Homebrew (the comparisons above had 0.4.1). Every number in this section is from that one machine; the M4 Max has
+not been run again with any of this.
+
+### A short prompt after a rest: not the clock (e37, e38; issue 1)
+
+The next step of issue 1 first, without a model (`bench/experiments/e37_idle_gpu.py`): after two seconds or more
+of nothing an addition of two numbers takes 4-15 ms where it took 0.2, and 400 small products one after another
+37-58 ms where they took 16. The CPU slows too: a loop of Python 6.4 ms one time after another, 14-23 after a
+rest of half a second or more. So the GPU does come back slowly; but that is not what a prompt pays.
+
+With the model (`bench/experiments/e38_idle_parts.py`, Q2_0), a piece of 64 tokens split into the CPU building
+its graph and the GPU computing it, in ms:
+
+    one after another                                          4 +  92
+    after 2-8 s                                            15-24 + 223-379
+    after 2-8 s, the GPU given work every 0.05-0.5 s        12-20 + 221-336   (8 MB of products, or 1-2 GB
+                                                                                summed; 2 to 40% of the time)
+    after 0.5-1 s, the CPU kept busy                            5 + 101-115
+    after 2-8 s, the CPU kept busy                              8 + 223-306
+    after 2-8 s, MLX's arrays wired                         16-21 + 150-163   but after 4-8 s the first thing
+                                                                               on the GPU waits 250-320 ms
+    after 2-8 s, wired, one addition every 1-2.5 s           5-20 + 103-161
+
+Work during the rest did not help, however much: not the clock. Two things instead. The arrays MLX does not keep
+resident are let go of by the GPU after about two seconds of nothing, and every piece after that computes at
+less than half speed; resident (`mx.set_wired_limit`, which mlx-lm sets and this engine did not), they are not.
+And after about four seconds of nothing the GPU sleeps, and the first thing given to it waits 250-320 ms; one
+addition a second keeps it awake, at a cost too small to see. What is left, 60-80 ms after a rest of half a
+second or more, is the CPU's: kept busy it goes, which a server should not do.
+
+The server now does both where the model is held whole (`serve.py`): its arrays wired, and for `--keep-awake`
+seconds after a request (600 by default, 0 for never) an addition a second. The four prompts of the comparison
+and its 1,180-token one, as the server reads them with 8 s between requests (`bench/compare_servers.py --only
+"strata-mlx default"`, Q2_0, two rounds):
+
+                              27 tokens   31 tokens   49 tokens   340 tokens   1,180 tokens   answers
+    before                    522-548     560-623     534-547     587-619      688-1,187 ms   97-166 tok/s
+    wired, no additions       436-456     630-636     592-643     533-655      966-969 ms     134-187 tok/s
+    wired and additions       124-145     136-146     152-156     276-282      507 ms         127-180 tok/s
+
+Wired alone makes answers faster and prompts no faster; both, a short prompt is read four times as fast. Where
+experts are read from the SSD the arrays are not wired, so that macOS can still move memory on a small Mac.
+
+### All engines in one session (issue 2)
+
+`bench/compare_servers.py`, each engine in turn and again in the opposite order, on this machine; tok/s:
+
+                         answers (four prompts of 256 tokens)    reading 1,180 tokens
+                         strata-mlx   --spec 1   llama.cpp        strata-mlx    --spec 1      llama.cpp
+    Q2_0                 132-189      75-102     60-61            2,346-2,360   2,449-2,675   1,291-1,292
+    IQ3_S                103-152      71-90      57-58            2,364         2,384-2,483   1,288-1,304
+    IQ3_XXS              122-161      71-86      58-59            2,413-2,514   2,554-2,574   1,317-1,326
+    IQ2_XS               118-166      72-102     60-61            2,500-2,501   2,551-2,561   1,346-1,348
+
+The 27-token prompt: 136-137 ms here (102-103 with `--spec 1`), 248-971 by llama.cpp. LM Studio is not on this
+machine.
+
+### The floats kept for prompts, counted (issue 3)
+
+They are kept only where the whole model and they fit (`dense.kept_floats`, `ScaledLinear.keep`, decided in
+`load.py`); elsewhere they are made for each chunk and let go, as before they were kept. A machine that reads
+experts from the SSD never keeps them: the experts have more use for the memory. `--check` says the same. The
+IQ3_S file as a 64 GB machine (`bench/paged.py --machine-memory 64`): after the first prompt the arrays were 0.9
+GB more than the experts and everything else, where issue 3 saw 3.6; the process at its peak 50.8 GB, which
+leaves macOS 17.9 of a 64 GB machine's 68.7.
+
+### A prompt as a small machine: the next layer read while one computes (issue 4)
+
+Timed per layer, as a 16 GB machine with the 1,468-token prompt below: a layer's 0.7 GB read in 57-69 ms (this
+SSD gives 14 GB/s in pieces of 1 MiB, `bench/ssd_reads.py`), then copied into MLX's arrays on the thread that
+runs the model, 34-64 ms more, while the disk waited.
+
+What is built (`paged.py`): for a chunk of 8,192 (token, expert) pairs or more, the next layer's experts that are
+not in memory are read on another thread while this layer computes, straight into arrays made for them
+beforehand (MLX lets their memory be written where it lies; nothing of MLX is called on that thread); the GPU then
+joins them with the experts in memory, which are no longer read again. A layer read ahead is used whole even
+where the chunk turns out to use fewer of its experts. The store keeps one layer's experts free for it (0.71 GB
+with Q2_0, 1.36 with IQ3_S; `--check` counts it): the process at its peak was 0.48 GB larger than before, as a 16
+GB machine.
+
+The 1,468-token prompt (`bench/prompt_1468.txt`, the edit example of `spec_decode.py` five times) and the
+340-token edit prompt, Q2_0, the file dropped from the page cache, tok/s:
+
+                          1,468 tokens                    340 tokens          answers
+                          before       now                before    now
+    as a 16 GB machine    217-247      390-403            99-102    96-102 (83 once)  the same
+    as a 24 GB machine    214-216      382-386            117-119   117-119    the same
+    as a 32 GB machine    128-183      410-433            22-135    152-153    the same
+
+Tried on the way and not kept: reading ahead for every chunk of more than 640 pairs (a chunk of 65 tokens whose
+experts were all in memory then read 502 more a layer; and the 340-token prompt was a sixth slower as a 24 GB
+machine); guessing per layer from the experts' profile whether it would go whole (the profile said every layer
+would at 1,468 tokens, and five did not); copying the experts in memory into the read layer on the CPU (a second
+a prompt as a 32 GB machine); reading through runs of up to 4 or 16 experts in memory to make fewer, longer reads
+(twice the bytes, and slower).
+
+### Float32 on an M5 (issue 5), and the two files not run before
+
+`bench/experiments/e29_answer_quality.py` with the Q2_0 file: float32 with the draft head and the list wrote the
+model's own answer at every token of the four, 256 of 256 each, and the same answer again; float16 at 252-256 of
+256, where two tokens were nearly level, as on the M4 Max. Float32 93-128 tok/s, float16 134-169. (e29 and
+`spec_decode.py --dtype float32` now turn MLX's reduced float32 off, as the server does: on this machine a
+float32 product of 1024-cubes is off by 7.6e-4 of its largest value by default, 1.2e-6 so.)
+
+IQ3_XXS and IQ2_XS load and run as they are. Against llama.cpp from the same file (`bench/compare_llama.py
+--windows 1 4`, the 1,468-token prompt and 64 tokens after it), the top token the same at every step: IQ3_XXS 64
+of 64 in one pass, a token at a time and four a pass, 63 with the engine a token a pass; IQ2_XS 64 of 64 every
+way; IQ3_S 63 of 64 every way, all at the same step. Their speeds are in the table above.

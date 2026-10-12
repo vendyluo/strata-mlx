@@ -1,0 +1,102 @@
+[
+ {
+  "engine": "strata-mlx",
+  "prompt": "prose",
+  "prompt_tokens": 27,
+  "prompt_tps": 51.753881541115575,
+  "tokens": 256,
+  "tps": 96.83031999394811,
+  "guesses_kept": 170,
+  "guesses_made": 340
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "code",
+  "prompt_tokens": 31,
+  "prompt_tps": 49.75124378109452,
+  "tokens": 256,
+  "tps": 113.08419471684778,
+  "guesses_kept": 180,
+  "guesses_made": 291
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "reasoning",
+  "prompt_tokens": 49,
+  "prompt_tps": 89.53042207198978,
+  "tokens": 256,
+  "tps": 146.45308924485127,
+  "guesses_kept": 195,
+  "guesses_made": 239
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "edit",
+  "prompt_tokens": 340,
+  "prompt_tps": 549.5393567156942,
+  "tokens": 256,
+  "tps": 154.04055599013176,
+  "guesses_kept": 198,
+  "guesses_made": 225
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "reading",
+  "prompt_tokens": 1180,
+  "prompt_tps": 994.3540911772141,
+  "tokens": 16,
+  "tps": 130.6122448979592,
+  "guesses_kept": 11,
+  "guesses_made": 13
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "prose",
+  "prompt_tokens": 27,
+  "prompt_tps": 49.31506849315068,
+  "tokens": 256,
+  "tps": 117.95060818282343,
+  "guesses_kept": 174,
+  "guesses_made": 321
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "code",
+  "prompt_tokens": 31,
+  "prompt_tps": 55.40661304736372,
+  "tokens": 256,
+  "tps": 137.9682026407976,
+  "guesses_kept": 188,
+  "guesses_made": 257
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "reasoning",
+  "prompt_tokens": 49,
+  "prompt_tps": 91.7087778401647,
+  "tokens": 256,
+  "tps": 165.6100401086816,
+  "guesses_kept": 185,
+  "guesses_made": 209
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "edit",
+  "prompt_tokens": 340,
+  "prompt_tps": 579.5125276972899,
+  "tokens": 256,
+  "tps": 161.53457849570924,
+  "guesses_kept": 185,
+  "guesses_made": 207
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "reading",
+  "prompt_tokens": 1180,
+  "prompt_tps": 1714.1196978500873,
+  "tokens": 16,
+  "tps": 135.36379018612521,
+  "guesses_kept": 10,
+  "guesses_made": 11
+ }
+]

@@ -1,0 +1,282 @@
+[
+ {
+  "engine": "llama.cpp (llama-server)",
+  "prompt": "prose",
+  "prompt_tokens": 27,
+  "prompt_tps": 27.814205229688675,
+  "tokens": 256,
+  "tps": 60.05225252466735
+ },
+ {
+  "engine": "llama.cpp (llama-server)",
+  "prompt": "code",
+  "prompt_tokens": 31,
+  "prompt_tps": 131.616376473785,
+  "tokens": 256,
+  "tps": 59.99920942218174
+ },
+ {
+  "engine": "llama.cpp (llama-server)",
+  "prompt": "reasoning",
+  "prompt_tokens": 49,
+  "prompt_tps": 123.96244696810624,
+  "tokens": 256,
+  "tps": 60.46905490187058
+ },
+ {
+  "engine": "llama.cpp (llama-server)",
+  "prompt": "edit",
+  "prompt_tokens": 340,
+  "prompt_tps": 1035.3889865064452,
+  "tokens": 256,
+  "tps": 60.112091370378884
+ },
+ {
+  "engine": "llama.cpp (llama-server)",
+  "prompt": "reading",
+  "prompt_tokens": 1180,
+  "prompt_tps": 1290.6796522165237,
+  "tokens": 16,
+  "tps": 58.69669850636468
+ },
+ {
+  "engine": "strata-mlx, a token a pass (--spec 1)",
+  "prompt": "prose",
+  "prompt_tokens": 27,
+  "prompt_tps": 262.9016553067186,
+  "tokens": 256,
+  "tps": 74.82317180101712,
+  "guesses_kept": 10,
+  "guesses_made": 34
+ },
+ {
+  "engine": "strata-mlx, a token a pass (--spec 1)",
+  "prompt": "code",
+  "prompt_tokens": 31,
+  "prompt_tps": 232.55813953488368,
+  "tokens": 256,
+  "tps": 78.49630515438628,
+  "guesses_kept": 25,
+  "guesses_made": 61
+ },
+ {
+  "engine": "strata-mlx, a token a pass (--spec 1)",
+  "prompt": "reasoning",
+  "prompt_tokens": 49,
+  "prompt_tps": 331.0810810810811,
+  "tokens": 256,
+  "tps": 79.81293842556508,
+  "guesses_kept": 38,
+  "guesses_made": 104
+ },
+ {
+  "engine": "strata-mlx, a token a pass (--spec 1)",
+  "prompt": "edit",
+  "prompt_tokens": 340,
+  "prompt_tps": 1557.4896930829134,
+  "tokens": 256,
+  "tps": 102.18745010378413,
+  "guesses_kept": 91,
+  "guesses_made": 131
+ },
+ {
+  "engine": "strata-mlx, a token a pass (--spec 1)",
+  "prompt": "reading",
+  "prompt_tokens": 1180,
+  "prompt_tps": 2674.524025385313,
+  "tokens": 16,
+  "tps": 77.22007722007721,
+  "guesses_kept": 0,
+  "guesses_made": 0
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "prose",
+  "prompt_tokens": 27,
+  "prompt_tps": 196.7930029154519,
+  "tokens": 256,
+  "tps": 135.52861453756154,
+  "guesses_kept": 177,
+  "guesses_made": 304
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "code",
+  "prompt_tokens": 31,
+  "prompt_tps": 241.24513618677042,
+  "tokens": 256,
+  "tps": 140.32779696321876,
+  "guesses_kept": 188,
+  "guesses_made": 298
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "reasoning",
+  "prompt_tokens": 49,
+  "prompt_tps": 340.9881697981907,
+  "tokens": 256,
+  "tps": 171.86975495132594,
+  "guesses_kept": 201,
+  "guesses_made": 262
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "edit",
+  "prompt_tokens": 340,
+  "prompt_tps": 1190.059502975149,
+  "tokens": 256,
+  "tps": 188.8462673354972,
+  "guesses_kept": 204,
+  "guesses_made": 232
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "reading",
+  "prompt_tokens": 1180,
+  "prompt_tps": 2359.528094381124,
+  "tokens": 16,
+  "tps": 136.2862010221465,
+  "guesses_kept": 11,
+  "guesses_made": 15
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "prose",
+  "prompt_tokens": 27,
+  "prompt_tps": 198.09244314013205,
+  "tokens": 256,
+  "tps": 131.53838248895283,
+  "guesses_kept": 176,
+  "guesses_made": 317
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "code",
+  "prompt_tokens": 31,
+  "prompt_tps": 234.84848484848487,
+  "tokens": 256,
+  "tps": 148.18244964112066,
+  "guesses_kept": 186,
+  "guesses_made": 285
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "reasoning",
+  "prompt_tokens": 49,
+  "prompt_tps": 337.9310344827586,
+  "tokens": 256,
+  "tps": 184.46462026228562,
+  "guesses_kept": 204,
+  "guesses_made": 250
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "edit",
+  "prompt_tokens": 340,
+  "prompt_tps": 1196.7617036254837,
+  "tokens": 256,
+  "tps": 187.71080803636897,
+  "guesses_kept": 203,
+  "guesses_made": 229
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "reading",
+  "prompt_tokens": 1180,
+  "prompt_tps": 2345.924453280318,
+  "tokens": 16,
+  "tps": 135.0210970464135,
+  "guesses_kept": 11,
+  "guesses_made": 15
+ },
+ {
+  "engine": "strata-mlx, a token a pass (--spec 1)",
+  "prompt": "prose",
+  "prompt_tokens": 27,
+  "prompt_tps": 265.22593320235757,
+  "tokens": 256,
+  "tps": 74.7183468565758,
+  "guesses_kept": 10,
+  "guesses_made": 34
+ },
+ {
+  "engine": "strata-mlx, a token a pass (--spec 1)",
+  "prompt": "code",
+  "prompt_tokens": 31,
+  "prompt_tps": 293.00567107750476,
+  "tokens": 256,
+  "tps": 78.72078720787208,
+  "guesses_kept": 26,
+  "guesses_made": 63
+ },
+ {
+  "engine": "strata-mlx, a token a pass (--spec 1)",
+  "prompt": "reasoning",
+  "prompt_tokens": 49,
+  "prompt_tps": 291.14676173499697,
+  "tokens": 256,
+  "tps": 80.01500281302744,
+  "guesses_kept": 37,
+  "guesses_made": 103
+ },
+ {
+  "engine": "strata-mlx, a token a pass (--spec 1)",
+  "prompt": "edit",
+  "prompt_tokens": 340,
+  "prompt_tps": 1283.0188679245282,
+  "tokens": 256,
+  "tps": 101.87432846511997,
+  "guesses_kept": 91,
+  "guesses_made": 131
+ },
+ {
+  "engine": "strata-mlx, a token a pass (--spec 1)",
+  "prompt": "reading",
+  "prompt_tokens": 1180,
+  "prompt_tps": 2449.14902449149,
+  "tokens": 16,
+  "tps": 74.4186046511628,
+  "guesses_kept": 0,
+  "guesses_made": 0
+ },
+ {
+  "engine": "llama.cpp (llama-server)",
+  "prompt": "prose",
+  "prompt_tokens": 27,
+  "prompt_tps": 108.83278849758352,
+  "tokens": 256,
+  "tps": 60.73795905689908
+ },
+ {
+  "engine": "llama.cpp (llama-server)",
+  "prompt": "code",
+  "prompt_tokens": 31,
+  "prompt_tps": 122.68918870784539,
+  "tokens": 256,
+  "tps": 60.48894997350347
+ },
+ {
+  "engine": "llama.cpp (llama-server)",
+  "prompt": "reasoning",
+  "prompt_tokens": 49,
+  "prompt_tps": 236.7115452433057,
+  "tokens": 256,
+  "tps": 60.682499643044125
+ },
+ {
+  "engine": "llama.cpp (llama-server)",
+  "prompt": "edit",
+  "prompt_tokens": 340,
+  "prompt_tps": 973.6066686329704,
+  "tokens": 256,
+  "tps": 60.46959979796039
+ },
+ {
+  "engine": "llama.cpp (llama-server)",
+  "prompt": "reading",
+  "prompt_tokens": 1180,
+  "prompt_tps": 1291.7124604276225,
+  "tokens": 16,
+  "tps": 58.274379086490825
+ }
+]

@@ -1,0 +1,102 @@
+[
+ {
+  "engine": "strata-mlx",
+  "prompt": "prose",
+  "prompt_tokens": 27,
+  "prompt_tps": 59.14567360350493,
+  "tokens": 256,
+  "tps": 134.09459954952595,
+  "guesses_kept": 177,
+  "guesses_made": 303
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "code",
+  "prompt_tokens": 31,
+  "prompt_tps": 48.78048780487805,
+  "tokens": 256,
+  "tps": 139.5932166421288,
+  "guesses_kept": 187,
+  "guesses_made": 298
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "reasoning",
+  "prompt_tokens": 49,
+  "prompt_tps": 76.16974972796518,
+  "tokens": 256,
+  "tps": 187.12082450113297,
+  "guesses_kept": 210,
+  "guesses_made": 257
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "edit",
+  "prompt_tokens": 340,
+  "prompt_tps": 519.4011610143599,
+  "tokens": 256,
+  "tps": 183.44679326406305,
+  "guesses_kept": 203,
+  "guesses_made": 231
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "reading",
+  "prompt_tokens": 1180,
+  "prompt_tps": 1218.2531488746645,
+  "tokens": 16,
+  "tps": 157.48031496062993,
+  "guesses_kept": 11,
+  "guesses_made": 13
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "prose",
+  "prompt_tokens": 27,
+  "prompt_tps": 61.98347107438016,
+  "tokens": 256,
+  "tps": 135.47123882097685,
+  "guesses_kept": 177,
+  "guesses_made": 301
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "code",
+  "prompt_tokens": 31,
+  "prompt_tps": 49.22197523023182,
+  "tokens": 256,
+  "tps": 143.8040669587687,
+  "guesses_kept": 185,
+  "guesses_made": 287
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "reasoning",
+  "prompt_tokens": 49,
+  "prompt_tps": 82.71438217420662,
+  "tokens": 256,
+  "tps": 175.29443987948505,
+  "guesses_kept": 200,
+  "guesses_made": 251
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "edit",
+  "prompt_tokens": 340,
+  "prompt_tps": 637.6594148537133,
+  "tokens": 256,
+  "tps": 185.70910409865795,
+  "guesses_kept": 202,
+  "guesses_made": 225
+ },
+ {
+  "engine": "strata-mlx",
+  "prompt": "reading",
+  "prompt_tokens": 1180,
+  "prompt_tps": 1221.911566739153,
+  "tokens": 16,
+  "tps": 141.71833480956596,
+  "guesses_kept": 11,
+  "guesses_made": 15
+ }
+]
