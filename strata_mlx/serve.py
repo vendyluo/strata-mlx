@@ -360,6 +360,9 @@ def main():
     awake = KeepAwake(float(opts["--keep-awake"]), 0 if paged or opts["--wired"] == "off" else
                       mx.device_info()["max_recommended_working_set_size"], set_wired,
                       lambda: mx.eval(mx.array(1.0) + 1))
+    if not paged and not model.keeps_floats:
+        print("strata-mlx: the Q6_K layers' weights as floats do not fit beside the model; they are made anew for "
+              "each chunk of a prompt, which reads prompts about a tenth slower", file=sys.stderr)
     mtp = load_mtp(opts["--mtp"], model.args.text, dtype) if opts["--mtp"] else None
     chunk = int(opts["--prefill"]) if opts["--prefill"].isdigit() else 2048
     # --spec is the CUDA engine's window; here anything above 1 turns the draft head on, and how many guesses it

@@ -81,9 +81,10 @@ def sizes(files: list) -> tuple:
     return experts, dense
 
 
-def all_fit(machine: int, experts: int, dense: int) -> bool:
-    """Whether a machine of that much memory holds the whole model, sizes as in the file."""
-    return machine - SYSTEM - WORKING >= experts + DENSE_AS_ARRAYS * dense + DRAFT_HEAD
+def all_fit(machine: int, experts: int, dense: int, floats: int = 0) -> bool:
+    """Whether a machine of that much memory holds the whole model, sizes as in the file; with `floats`, and the
+    weights of its Q6_K layers as floats beside it, kept for prompts (dense.ScaledLinear, #3)."""
+    return machine - SYSTEM - WORKING >= experts + DENSE_AS_ARRAYS * dense + DRAFT_HEAD + floats
 
 
 class ExpertStore:

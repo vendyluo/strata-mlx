@@ -93,6 +93,17 @@ def test_floats_made_for_a_prompt_are_kept():
     np.testing.assert_array_equal(np.array(lin(x)), np.array(first))
 
 
+def test_floats_not_kept_are_made_for_each_piece_and_let_go():
+    from strata_mlx import dense
+
+    kept, made = linear(q6k(5)), linear(q6k(5))
+    made.keep = False  # a machine without the memory for them (load.py, #3)
+    x = mx.random.normal((MAX_TOKENS + 2, COLS))
+    np.testing.assert_array_equal(np.array(made(x)), np.array(kept(x)))
+    assert made._floats is None and made not in dense._holding
+    dense.release()
+
+
 def test_a_shape_the_kernel_does_not_take_stays_floats():
     blocks = np.zeros((6 * 2, 210), dtype=np.uint8)
     lin = linear(Tensor("odd", (6, 512), "Q6_K", blocks.reshape(-1)))  # six rows: not groups of four

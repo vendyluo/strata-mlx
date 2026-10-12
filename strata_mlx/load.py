@@ -28,7 +28,7 @@ from mlx.utils import tree_flatten
 from mlx_lm.models import qwen4_exp
 
 from .blocks import BLOCK, BlockSwitchGLU, BlockSwitchLinear
-from .dense import AS_BLOCKS, BlockEmbedding, BlockLinear, ScaledLinear, fits
+from .dense import AS_BLOCKS, BlockEmbedding, BlockLinear, ScaledLinear, fits, kept_floats
 from .dense import as_blocks as stays_blocks
 from .paged import ExpertStore, PagedSwitchGLU, all_fit, sizes
 from .paged import machine_memory as paged_machine_memory
@@ -270,9 +270,14 @@ def load(path: str, dtype: mx.Dtype = mx.float16, expert_memory: float | str | N
     if meta.get("general.architecture") != "qwen4exp":
         raise ValueError(f"{Path(path).name} is a {meta.get('general.architecture')} model, not qwen4exp")
     used = set()
+    machine, (n_experts, n_dense) = machine_memory or paged_machine_memory(), sizes(files)
     if expert_memory == "auto":
-        expert_memory = None if all_fit(machine_memory or paged_machine_memory(), *sizes(files)) else 0.0
+        expert_memory = None if all_fit(machine, n_experts, n_dense) else 0.0
     store = ExpertStore(int(expert_memory * 1e9)) if expert_memory is not None else None
+    # #3: the Q6_K layers' floats for prompts are kept only where the whole model and they fit. Elsewhere they
+    # would take memory the rule gave to macOS or to the experts; made anew for each chunk, prompts are read a
+    # tenth slower (320 against 355-369 tok/s with the IQ3_S file on the M4 Max) and answers are as fast.
+    keep = store is None and all_fit(machine, n_experts, n_dense, kept_floats(g.tensors, dtype.size))
     if dense_blocks is None:
         dense_blocks = AS_BLOCKS if store is not None else ()
 
@@ -281,7 +286,10 @@ def load(path: str, dtype: mx.Dtype = mx.float16, expert_memory: float | str | N
         return tensors[name]
 
     def lin(name: str, rows: np.ndarray | None = None, cols: np.ndarray | None = None):
-        return linear(take(name), rows, cols, dense_blocks)
+        layer = linear(take(name), rows, cols, dense_blocks)
+        if isinstance(layer, ScaledLinear):
+            layer.keep = keep
+        return layer
 
     def vec(name: str) -> mx.array:
         return mx.array(np.ascontiguousarray(to_float(take(name))))
@@ -422,5 +430,5 @@ def load(path: str, dtype: mx.Dtype = mx.float16, expert_memory: float | str | N
         # memory to spare; and with a limit the first long prompt after a start is as fast as the next.
         mx.set_cache_limit(POOL)
     model.eval()
-    model.expert_store = store
+    model.expert_store, model.keeps_floats = store, keep
     return model, meta

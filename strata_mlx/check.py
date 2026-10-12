@@ -13,12 +13,14 @@ Where experts are read from the SSD, the dense tensors of two types stay the fil
 and take that much less than the rule's arrays; that is counted for such a Mac, as the engine finds it when it
 starts.
 
-One thing is counted here that the engine's rule leaves out: the weights of the Q6_K layers as floats, kept
-from the first prompt on (dense.py), 3.3 GB with the IQ3_S file. On a Mac that lacks just that, the engine still
-holds the file whole, and the report says by how much it is short.
+The weights of the Q6_K layers as floats, 3.3 GB with the IQ3_S file, are kept from the first prompt on only
+where they fit beside the whole model (dense.py, load.py); a Mac that holds the file whole and lacks just that
+makes them anew for each chunk of a prompt, and the report says so.
 
 Memory is in the GB of About This Mac (2^30 bytes), sizes on disk in the GB of Finder (10^9). None of this is a
-measurement: what has been measured, and on which Mac, is in the README.
+measurement: what has been measured, and on which Mac, is in the README. It is for the engine's default floats,
+float16: with `--dtype float32` the floats kept for prompts are twice as large and the rest larger too, and the
+engine, which counts the first, may not keep them where this says it does.
 """
 
 import argparse
@@ -29,7 +31,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from .dense import fits, spared
+from .dense import kept_floats, spared
 from .gguf import shards
 from .paged import DENSE_AS_ARRAYS, DRAFT_HEAD, LEAST, SYSTEM, WORKING, all_fit, machine_memory, sizes
 
@@ -59,18 +61,16 @@ def of(path: str, files: list | None = None) -> Model:
     """The sizes of the model whose first shard is at `path`, from the headers of its files."""
     files = files or shards(path)
     experts, dense = sizes(files)
-    # a chunk of a prompt multiplies these as floats (dense.ScaledLinear); the output layer never sees a chunk
-    floats = sum(2 * t.shape[0] * t.shape[1] for name, t in files[0].tensors.items()
-                 if t.type == "Q6_K" and len(t.shape) == 2 and fits(*t.shape) and name != "output.weight")
     m = _NAME.search(path)
-    return Model(m.group(1) if m else Path(path).stem, experts, dense, floats, sum(os.path.getsize(f.path) for f in files),
-                 spared(files[0].tensors))
+    return Model(m.group(1) if m else Path(path).stem, experts, dense, kept_floats(files[0].tensors),
+                 sum(os.path.getsize(f.path) for f in files), spared(files[0].tensors))
 
 
 @dataclass
 class Plan:
     whole: bool  # every expert in memory: what the engine decides
-    needs: int  # the memory of a Mac that holds the file whole and has read a prompt
+    floats: bool  # and the Q6_K layers' floats kept for prompts beside them
+    needs: int  # the memory of a Mac that holds the file whole and keeps the floats
     kept: int  # the experts' share of this Mac's memory, where they do not all fit
     least: int  # the memory of the smallest Mac that leaves the experts anything
 
@@ -78,18 +78,19 @@ class Plan:
 def plan(m: Model, machine: int) -> Plan:
     fixed = int(SYSTEM + WORKING + DENSE_AS_ARRAYS * m.dense + DRAFT_HEAD)
     paged = fixed - m.spared
-    return Plan(all_fit(machine, m.experts, m.dense), fixed + m.experts + m.floats, machine - paged, paged + LEAST)
+    return Plan(all_fit(machine, m.experts, m.dense), all_fit(machine, m.experts, m.dense, m.floats),
+                fixed + m.experts + m.floats, machine - paged, paged + LEAST)
 
 
 def lines(m: Model, machine: int) -> list:
     p, out = plan(m, machine), [f"{m.name}, {m.disk / 1e9:.1f} GB on disk"]
-    if p.whole and p.needs <= machine:
+    if p.floats:
         out += [f"  held whole in memory: needs {p.needs / GB:.1f} GB, {(machine - p.needs) / GB:.1f} GB to spare",
                 "  nothing is read from the disk while it runs"]
     elif p.whole:
-        out += [f"  held whole in memory, and {(p.needs - machine) / GB:.1f} GB short of the {p.needs / GB:.1f} GB that takes:",
-                f"  the engine does not count the {m.floats / GB:.1f} GB its Q6_K layers take as floats once a prompt is read,",
-                "  so macOS is left that much less than it is meant to have"]
+        out += [f"  held whole in memory, without the {m.floats / GB:.1f} GB its Q6_K layers take as floats for prompts:",
+                "  they are made anew for each chunk of a prompt, which reads prompts about a tenth slower;",
+                f"  nothing is read from the disk while it runs, and {p.needs / GB:.1f} GB would keep the floats too"]
     elif p.kept >= LEAST:
         out += [f"  read from the SSD in part: about {p.kept / GB:.1f} GB of its {m.experts / GB:.1f} GB of experts stay in "
                 f"memory ({p.kept / m.experts:.0%}),",
@@ -118,7 +119,7 @@ def report(models: list, machine: int, this_mac: bool = False, parked: int = 0) 
         version = platform.mac_ver()[0]
         if version and int(version.split(".")[0]) < 27:
             out.append(f"This Mac runs macOS {version}: the engine has only been run on macOS 27.")
-    out.append("Worked out from sizes, not measured: see the README for the speeds measured, and on which Mac.")
+    out.append("Worked out from sizes for float16, not measured: see the README for the speeds measured, and on which Mac.")
     return "\n".join(out)
 
 
