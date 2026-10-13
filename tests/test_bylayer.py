@@ -135,8 +135,99 @@ def test_a_layers_experts_are_read_once_for_a_piece(made):
     assert LAYERS * 8 * ONE_EXPERT <= store.bytes_read - store.held <= LAYERS * (7 + 8) * ONE_EXPERT
     make(made, ahead=False, chunk=3).read(prompt)  # chunks that use few experts: each read once, or the layer
     assert store.bytes_read - store.held <= LAYERS * (7 + 8) * ONE_EXPERT
-    make(made, piece=48).read(prompt)  # three pieces: 48, 48 and the rest
-    assert store.bytes_read - store.held == LAYERS * 3 * 8 * ONE_EXPERT
+    # three pieces: 48, 48 and the rest. Each reads a layer once, but not what memory holds of it: the two experts
+    # a layer the token before the message's end left there are not read again by the two pieces after it
+    make(made, piece=48).read(prompt)
+    assert store.bytes_read - store.held == LAYERS * (3 * 8 - 2 * 2) * ONE_EXPERT
+
+
+@pytest.mark.parametrize("small", [False, True])
+@pytest.mark.parametrize("how", [{}, {"piece": 48}, {"ahead": False}, {"piece": 0}])
+def test_what_memory_holds_of_a_layer_is_not_read_again(made, how, small, monkeypatch):
+    import numpy as np
+
+    if small:  # pages and pieces smaller than this model's runs of experts: a run read in several pieces
+        monkeypatch.setattr(paged, "PAGE", 256)
+        monkeypatch.setattr(paged, "PIECE", 512)
+    store, prompt = made[0].expert_store, PROMPT[:113]
+    a = make(made, **how)
+    ta = a.read(prompt)
+    read = store.bytes_read
+    b = make(made, **how)
+    counts = np.zeros((LAYERS, 8), dtype=np.uint32)
+    counts[:, [0, 3, 4, 7]] = 1  # half of each layer in memory, in two runs: what is read lies between them
+    assert store.preload(counts) == LAYERS * 4
+    store.reset_stats()
+    tb = b.read(prompt)
+    # a layer whole is half read, or less: a token's chunk may find its experts in memory too
+    assert store.bytes_read <= read - LAYERS * 4 * ONE_EXPERT
+    assert differ(a, b) == [] and ta == tb
+    assert answer(b, tb) == answer(a, ta)
+
+
+def in_file(tensors: tuple) -> list:
+    import numpy as np
+
+    out = []
+    for t in tensors:
+        with open(t.path, "rb") as f:
+            f.seek(t.offset)
+            out.append(np.frombuffer(f.read(t.data.nbytes), dtype=np.uint8))
+    return out
+
+
+def test_experts_let_go_of_while_their_layer_is_read_ahead_are_still_in_it(made):
+    import numpy as np
+
+    store = made[0].expert_store
+    make(made)
+    layer = min(store.layers)
+    counts = np.zeros((LAYERS, 8), dtype=np.uint32)
+    counts[layer, [0, 3, 4, 7]] = 1
+    assert store.preload(counts) == 4
+    store.reset_stats()
+    store.ahead(layer)
+    store.lru.clear()  # a token's chunk lets them go before the read is taken
+    store.held = 0
+    store.hold(layer)
+    for got, want in zip(store.whole(store.layers[layer], layer), in_file(store.layers[layer])):
+        np.testing.assert_array_equal(np.array(got), want)
+    assert store.bytes_read == 4 * ONE_EXPERT
+    store.release()
+
+
+def test_a_short_read_ahead_fails_at_hold_once_every_read_of_it_has_ended(made, monkeypatch):
+    import itertools
+    import os
+    import time
+
+    import numpy as np
+
+    store = made[0].expert_store
+    make(made)
+    first, then = sorted(store.layers)[:2]
+    real, calls, started, ended = os.preadv, itertools.count(), [], []
+
+    def preadv(fd, buffers, at):
+        k = next(calls)
+        started.append(k)
+        if k:
+            time.sleep(0.05)
+        n = real(fd, buffers, at)
+        ended.append(k)
+        return n - 1 if k == 0 else n
+
+    monkeypatch.setattr(paged.os, "preadv", preadv)
+    store.ahead(first)
+    with pytest.raises(OSError, match="short read"):
+        store.hold(first)
+    assert len(started) >= len(store.layers[first]) and len(ended) == len(started)
+    monkeypatch.setattr(paged.os, "preadv", real)
+    store.ahead(then)  # and the next layer is read as if nothing had failed
+    store.hold(then)
+    for got, want in zip(store.whole(store.layers[then], then), in_file(store.layers[then])):
+        np.testing.assert_array_equal(np.array(got), want)
+    store.release()
 
 
 def test_pieces():
