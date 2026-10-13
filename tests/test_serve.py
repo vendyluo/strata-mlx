@@ -118,6 +118,17 @@ def test_stop_ends_the_answer_with_cancel(session):
     assert seen[-1].split()[5] == "cancel" and seen[-1].split()[1] == "3"
 
 
+def test_a_line_says_whether_the_model_ran_for_it(session):
+    # KeepAwake wires the arrays again only after the model ran: they are resident then (serve_lines)
+    assert session.handle(f"GEN 4 {ids(PROMPT)}") is True
+    assert session.handle("GEN 4 x") is False  # ERR bad request
+    assert session.handle("VRAM 1") is False and session.handle("NOPE") is False
+    session.stop.set()
+    assert session.handle(f"GEN 200 {ids(PROMPT + [60, 61])}") is True  # stopped: what it read, it computed
+    assert session.lines[-1].split()[5] == "cancel"
+    session.stop.clear()
+
+
 def test_stop_while_the_prompt_is_read(session):
     seen = []
 
@@ -154,6 +165,50 @@ def test_arguments_of_the_other_engine_are_skipped():
     assert opts["--prompt-by-layer"] == opts["--read-ahead"] == "on"  # where experts are read from the SSD
     opts, skipped = serve._options(["--prompt-by-layer", "off", "--read-ahead", "off"])
     assert (opts["--prompt-by-layer"], opts["--read-ahead"], skipped) == ("off", "off", [])
+    # #1: the two things that keep a rest short, each with a switch of its own
+    assert (opts["--wired"], opts["--keep-awake"]) == ("on", "600")
+    opts, skipped = serve._options(["--wired", "off", "--keep-awake", "0"])
+    assert (opts["--wired"], opts["--keep-awake"], skipped) == ("off", "0", [])
+
+
+def keep_awake(seconds: float, limit: int):
+    """A KeepAwake on a clock of its own, and what it did: ("wire", bytes) and "wake"."""
+    now, did = [0.0], []
+    awake = serve.KeepAwake(seconds, limit, lambda size: did.append(("wire", size)), lambda: did.append("wake"),
+                            clock=lambda: now[0])
+    return awake, now, did
+
+
+def test_the_arrays_are_wired_only_while_the_gpu_is_kept_awake():
+    awake, now, did = keep_awake(600, 99)
+    assert did == [("wire", 99)] and awake.timeout() == serve.AWAKE_EVERY
+    now[0] = 599.5
+    awake.idle()
+    assert did[-1] == "wake" and awake.timeout() == serve.AWAKE_EVERY
+    now[0] = 600.5  # the window's last wait ends past it: the arrays let go of, nothing woken for after that
+    awake.idle()
+    assert did[-1] == ("wire", 0) and awake.timeout() is None
+    awake.idle()
+    assert did[-1] == ("wire", 0) and len(did) == 3
+    now[0] = 2000  # a request after a long rest, read without them; wired again after it, the window from there
+    awake.heard(ran=True)
+    assert did[-1] == ("wire", 99) and awake.timeout() == serve.AWAKE_EVERY
+    awake.heard(ran=True)  # a line inside the window: nothing to wire again
+    assert did.count(("wire", 99)) == 2
+    now[0] = 2599.5
+    assert awake.timeout() == serve.AWAKE_EVERY
+
+
+@pytest.mark.parametrize("seconds, limit", [(0, 99), (600, 0), (0, 0)])
+def test_never_kept_awake_or_never_wired(seconds, limit):
+    awake, now, did = keep_awake(seconds, limit)
+    for t in (0.5, 300, 700, 5000):
+        now[0] = t
+        awake.idle()
+        awake.heard(ran=True)
+        awake.idle()
+    assert not any(isinstance(d, tuple) for d in did)  # --keep-awake 0 wires nothing: wired asleep is the slowest
+    assert did.count("wake") == (7 if seconds else 0)  # each time but the one 4,300 s after the last line
 
 
 def test_a_conversation_is_saved_and_restored_over_the_protocol(session, tmp_path):
@@ -199,3 +254,57 @@ def test_what_is_left_of_a_machines_memory_goes_to_the_experts():
     free, cached = paged.available_memory()  # what `vm_stat` calls "Pages free" and "File-backed pages"
     assert 0 < free < paged.machine_memory() and 0 <= cached < paged.machine_memory()
     assert store.fit(4 * gib) == int(0.5e9)  # never nothing
+
+
+def test_a_last_addition_that_ends_past_the_window_still_lets_the_arrays_go():
+    awake, now, did = keep_awake(600, 99)
+    now[0] = 599.99
+    awake.wake = lambda: now.__setitem__(0, 600.01)  # the window ends while the GPU computes its addition
+    awake.idle()
+    assert awake.timeout() == serve.AWAKE_EVERY  # not a wait for ever with the arrays still wired
+    awake.idle()
+    assert did[-1] == ("wire", 0) and awake.timeout() is None
+
+
+def test_only_a_line_the_model_ran_for_wires_the_arrays_again():
+    awake, now, did = keep_awake(600, 99)
+    now[0] = 700
+    awake.idle()
+    awake.heard(ran=False)  # an ERR, a SAVE: the arrays are not resident, wiring them would wait ~250 ms
+    assert did == [("wire", 99), ("wire", 0)] and awake.timeout() == serve.AWAKE_EVERY
+    awake.heard(ran=True)
+    assert did[-1] == ("wire", 99)
+
+
+class Lines:
+    """A queue of the server's lines on a KeepAwake's clock: "" is a wait that ends with no line."""
+
+    def __init__(self, lines, now):
+        self.lines, self.now, self.waits = list(lines), now, []
+
+    def get(self, timeout=None):
+        self.waits.append(timeout)
+        line = self.lines.pop(0)
+        if line:
+            return line
+        assert timeout is not None, "a wait for ever with no line to come"
+        self.now[0] += timeout
+        raise serve.queue.Empty
+
+
+def test_the_loop_keeps_the_gpu_awake_lets_the_arrays_go_and_wires_them_after_a_request():
+    awake, now, did = keep_awake(3, 99)
+    handled = []
+
+    def handle(line):
+        handled.append(line)
+        return line.startswith("GEN")
+
+    lines = Lines(["GEN 1 5", "", "", "", "VRAM 1", "", "GEN 1 6", "QUIT"], now)
+    serve.serve_lines(lines, handle, awake)
+    assert handled == ["GEN 1 5", "VRAM 1", "GEN 1 6"]
+    # wired at the start; additions at 1 and 2 s, the window over at 3, let go of; the VRAM line starts a window
+    # but wires nothing; an addition; the request, then wired again
+    assert did == [("wire", 99), "wake", "wake", ("wire", 0), "wake", ("wire", 99)]
+    assert lines.waits[3] == serve.AWAKE_EVERY and lines.waits[4] is None  # past the window, unwired: no wakes
+

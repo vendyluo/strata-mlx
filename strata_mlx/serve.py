@@ -37,6 +37,16 @@ prefix other requests will start with. These are Strata's, as are the lines the 
 The draft head's guesses are worked out over the rows of the output layer that have been in sight (rows.py);
 `--guess-rows off` has them go over all rows.
 
+Between requests the GPU is not left idle for long (#1): for `--keep-awake <seconds>` after a request (600 by
+default, 0 for never) the engine gives the GPU one addition a second, and meanwhile a machine that holds the model
+keeps its arrays resident (MLX's wired limit; `--wired off` leaves them unwired). Unwired, a prompt read after two
+seconds of nothing ran at about half speed or less; wired, the first work after four seconds of nothing waited
+250-380 ms, as if the arrays were being made resident again (bench/experiments/e42, M5 Ultra: a piece of 64 tokens
+in 250-350 ms unwired after a rest so and 420-445 wired, the wait included; 110-180 ms with both). It takes both,
+on an M5 Ultra and on an M4 Max; wired with the GPU left alone is the slowest of all, so when the window ends the
+arrays are let go of, and they are wired again once the model has run for the next request, while they are still
+resident from it (KeepAwake, PR #7).
+
 `strata-mlx --check [--native <shard 1>] [--machine-memory <GiB>]` loads nothing and says which of these a Mac
 of that memory would do with a file (check.py).
 """
@@ -61,6 +71,64 @@ _FLOATS = ("temperature", "top_p", "min_p", "penalty_repeat", "penalty_freq", "p
 _INTS = ("top_k", "penalty_last_n", "seed")
 _CHECKPOINTS = ("ckpt", "pin")  # ckpt=0: no later request continues this one; pin=N: the first N tokens are a prefix
 _IGNORED = ("cvec", "pcie_frac", "spec_min_p")  # for the CUDA engine's expert cache and its options
+AWAKE_EVERY = 1.0  # seconds between the additions that keep the GPU awake: one in 2.5 s was enough as well (e42)
+
+
+def serve_lines(commands: queue.Queue, handle, awake) -> None:
+    """The lines from the server until QUIT. `handle(line)` says whether the model ran for it; between lines,
+    `awake` (KeepAwake) keeps the GPU and the arrays ready."""
+    while True:
+        try:
+            line = commands.get(timeout=awake.timeout())
+        except queue.Empty:
+            awake.idle()
+            continue
+        if line == "QUIT":
+            return
+        awake.heard(bool(handle(line)))
+
+
+class KeepAwake:
+    """#1, between requests: for `seconds` after the last line the GPU is given an addition every AWAKE_EVERY
+    seconds, and the model's arrays are wired (`limit` bytes; 0: never). Wired and left alone, a prompt is read
+    slower than with neither: the first work waits 250-380 ms, as if they were being made resident again, and
+    wiring them when a request comes waits as long. So at the window's end they are let go of; the next request
+    is read without them, and once the model has run for it they are wired again, in 10-30 ms after its DONE,
+    while still resident from it (PR #7).
+
+    `wire(bytes)` sets the limit, `wake()` gives the GPU its addition; `clock` is time.monotonic but in tests.
+    """
+
+    def __init__(self, seconds: float, limit: int, wire, wake, clock=time.monotonic):
+        self.seconds, self.limit = seconds, limit if seconds > 0 else 0
+        self.wire, self.wake, self.clock = wire, wake, clock
+        self.wired, self.last = False, clock()
+        if self.limit:
+            self.wire(self.limit)
+            self.wired = True
+
+    def timeout(self) -> float | None:
+        """How long to wait for the next line: past the window, once the arrays are let go of, nothing is woken
+        for, the CPU no more than the GPU. While they are wired the wait ends, however late the window's last
+        addition finished, so that `idle` lets them go."""
+        return AWAKE_EVERY if self.wired or self.clock() - self.last < self.seconds else None
+
+    def idle(self):
+        """No line for a while."""
+        if self.clock() - self.last < self.seconds:
+            self.wake()
+        elif self.wired:
+            self.wire(0)
+            self.wired = False
+
+    def heard(self, ran: bool = False):
+        """A line was handled, any line from the server, not only a request: someone is using it. `ran`: the
+        model ran for it, which leaves its arrays resident to be wired again; after any other line they would
+        wait as long as the next request would."""
+        if ran and self.limit and not self.wired:
+            self.wire(self.limit)
+            self.wired = True
+        self.last = self.clock()
 
 
 class Session:
@@ -70,8 +138,15 @@ class Session:
                  parked: Parked | None = None):
         self.engine, self.write, self.max_context, self.parked = engine, write, max_context, parked
         self.stop = stop or threading.Event()
+        self.ran = False
 
-    def handle(self, line: str):
+    def handle(self, line: str) -> bool:
+        """One line; whether the model ran for it (a DONE was written)."""
+        self.ran = False
+        self._handle(line)
+        return self.ran
+
+    def _handle(self, line: str):
         if line.startswith("GEN "):
             self.gen(line[4:])
         elif line.startswith("GENI "):
@@ -177,7 +252,7 @@ class Session:
     def _done(self, produced, prompt, reused, prompt_ms, decode_ms, finish, read=None):
         # `read`: the prompt tokens read by this request, which is not all the others when it was stopped while
         # reading (Strata's #471: the server counts a stopped read as reused + read)
-        s = self.engine.stats
+        s, self.ran = self.engine.stats, True
         read = len(prompt) - reused if read is None else max(0, read)
         self.write(f"DONE {produced} {len(prompt)} {prompt_ms:.1f} {decode_ms:.1f} {finish} {s.accepted} {s.drafted} "
                    f"{reused} 0 {s.lookup_steps} 0 0 0.0 {read} 0")
@@ -209,7 +284,7 @@ def _options(argv: list) -> dict:
              "--prefill": "2048", "--suffix-draft": "auto", "--expert-memory": "auto", "--machine-memory": None,
              "--expert-profile": "auto", "--guess-rows": "on", "--conversation-cache-mib": "0",
              "--conversation-cache-slots": "4", "--conversation-cache-min-tokens": "0",
-             "--prompt-by-layer": "on", "--read-ahead": "on"}
+             "--prompt-by-layer": "on", "--read-ahead": "on", "--keep-awake": "600", "--wired": "on"}
     out, skipped, i = dict(known), [], 0
     while i < len(argv):
         a = argv[i]
@@ -267,6 +342,24 @@ def main():
                     machine_memory=machine)
     store = model.expert_store
     paged = store is not None
+    # #1: resident, the arrays are not let go of by the GPU after a few seconds of nothing; not where experts are
+    # read from the SSD, whose machine may need macOS to be able to move memory
+
+    first = True
+
+    def set_wired(size: int):
+        nonlocal first
+        t = time.perf_counter()
+        mx.synchronize()  # as mlx-lm does: the limit is not changed while something is being computed
+        mx.set_wired_limit(size)
+        if not first:  # what letting go and wiring again take: after a request's DONE, before the next line
+            print(f"strata-mlx: the arrays {'wired again' if size else 'let go of'} in "
+                  f"{(time.perf_counter() - t) * 1e3:.0f} ms", file=sys.stderr)
+        first = False
+
+    awake = KeepAwake(float(opts["--keep-awake"]), 0 if paged or opts["--wired"] == "off" else
+                      mx.device_info()["max_recommended_working_set_size"], set_wired,
+                      lambda: mx.eval(mx.array(1.0) + 1))
     mtp = load_mtp(opts["--mtp"], model.args.text, dtype) if opts["--mtp"] else None
     chunk = int(opts["--prefill"]) if opts["--prefill"].isdigit() else 2048
     # --spec is the CUDA engine's window; here anything above 1 turns the draft head on, and how many guesses it
@@ -345,18 +438,22 @@ def main():
           f"guess_rows={int(engine.rows is not None)}"
           + (f" conversation_cache_mib={parked.budget >> 20} conversation_cache_slots={parked.slots}"
              if parked.budget else "")
-          + (f" expert_memory_gb={store.budget / 1e9:.1f}" if paged else ""))
+          + (f" expert_memory_gb={store.budget / 1e9:.1f}" if paged else "")
+          + f" wired={int(awake.limit > 0)} keep_awake={opts['--keep-awake']}")
     write(f"READY {max_context} stop")
-    while True:
-        line = commands.get()
-        if line == "QUIT":
-            return 0
-        session.handle(line)
+    awake.heard()  # the window from here, not from the load
+
+    def handle(line: str) -> bool:
+        ran = session.handle(line)
         if profile_path and line.startswith("GEN") and store.use:
             try:
                 save_profile(profile_path, store.profile(before))
             except OSError as e:
                 print(f"strata-mlx: the expert profile was not saved: {e}", file=sys.stderr)
+        return ran
+
+    serve_lines(commands, handle, awake)
+    return 0
 
 
 if __name__ == "__main__":
